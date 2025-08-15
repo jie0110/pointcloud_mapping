@@ -1,7 +1,13 @@
 <!-- launch/pointcloud_map_builder.launch -->
 <launch>
     <!-- 点云动态滤除节点 -->
-    <node name="dynamic_point_remover" pkg=>
+    <node name="dynamic_point_remover" pkg="pointcloud_mapping" type="dynamic_point_remover.py" output="screen">
+        <!-- 输入点云话题 -->
+        <param name="input_topic" value="/transformed_pointcloud" />
+        <!-- 输出滤除后的点云话题 -->
+        <param name="output_topic" value="/filtered_pointcloud" />
+    </node>
+
     <!-- 点云地图构建节点 -->
     <node name="pointcloud_map_builder" pkg="pointcloud_mapping" type="pointcloud_map_builder.py" output="screen">
         <!-- 基本话题配置 -->
@@ -24,9 +30,8 @@
         <param name="max_distance" value="50.0" />         <!-- 最大距离阈值 -->
         
         <!-- 地图保存配置 -->
-        <param name="auto_save" value="true" />
-        <param name="save_interval" value="60.0" />  <!-- 自动保存间隔（秒） -->
         <param name="save_directory" value="~/pointcloud_maps" />
+        <param name="map_name" value="accumulated_map" />
     </node>
     
     <!-- 可选：启动RViz可视化

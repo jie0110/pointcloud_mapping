@@ -35,9 +35,8 @@ class PointCloudMapBuilder:
         self.enable_voxel_filter = rospy.get_param('~enable_voxel_filter', True)
         
         # 地图保存配置
-        self.auto_save = rospy.get_param('~auto_save', True)
-        self.save_interval = rospy.get_param('~save_interval', 60.0)  # 自动保存间隔（秒）
         self.save_directory = rospy.get_param('~save_directory', '~/pointcloud_maps')
+        self.map_name = rospy.get_param('~map_name', 'accumulated_map')  # 地图文件名
         
         # 地图质量配置
         self.min_points_threshold = rospy.get_param('~min_points_threshold', 100)  # 最小点数阈值
@@ -49,8 +48,6 @@ class PointCloudMapBuilder:
         
         # 数据存储
         self.accumulated_points = []  # 累积的地图点
-        self.last_save_time = time.time()
-        self.last_auto_save_time = time.time()
         self.frame_count = 0
         self.total_frames_added = 0
         
@@ -102,13 +99,6 @@ class PointCloudMapBuilder:
             self.publish_map_timer_callback
         )
         
-        # 自动保存定时器
-        if self.auto_save:
-            self.auto_save_timer = rospy.Timer(
-                rospy.Duration(self.save_interval),
-                self.auto_save_timer_callback
-            )
-        
         rospy.loginfo("点云地图构建节点已启动")
         rospy.loginfo(f"输入话题: {self.input_topic}")
         rospy.loginfo(f"输出话题: {self.output_topic}")
@@ -134,7 +124,10 @@ class PointCloudMapBuilder:
         should_save = False
         
         if self.save_mode == 'time':
-            if current_time - self.last_save_time >= self.time_interval:
+            if not hasattr(self, 'last_save_time'):
+                self.last_save_time = current_time
+                should_save = True
+            elif current_time - self.last_save_time >= self.time_interval:
                 should_save = True
                 self.last_save_time = current_time
         else:  # frame mode
@@ -147,7 +140,7 @@ class PointCloudMapBuilder:
         
         # 确保点云在正确的坐标系中
         if msg.header.frame_id != self.map_frame:
-            transformed_msg = self.transform_pointcloud_to_map(msg)
+            transformed_msg = self.transform_pointcloud_to_map_frame(msg)
             if transformed_msg is None:
                 rospy.logwarn("点云坐标变换失败，跳过此帧")
                 return
@@ -180,14 +173,14 @@ class PointCloudMapBuilder:
         except Exception as e:
             rospy.logerr(f"处理点云时出错: {str(e)}")
     
-    def transform_pointcloud_to_map(self, pointcloud_msg):
+    def transform_pointcloud_to_map_frame(self, pointcloud_msg):
         """将点云转换到地图坐标系"""
         try:
             transform = self.tf_buffer.lookup_transform(
                 self.map_frame,
                 pointcloud_msg.header.frame_id,
                 pointcloud_msg.header.stamp,
-                rospy.Duration(1.0)
+                rospy.Duration(self.transform_timeout)
             )
             
             transformed_pc = tf2_sensor_msgs.do_transform_cloud(pointcloud_msg, transform)
@@ -278,7 +271,12 @@ class PointCloudMapBuilder:
                 header.stamp = rospy.Time.now()
                 header.frame_id = self.map_frame
                 
-                # 定义点云字段
+                # 只取前3个坐标(x,y,z)，忽略其他字段
+                xyz_points = []
+                for point in self.accumulated_points:
+                    xyz_points.append([point[0], point[1], point[2]])
+                
+                # 定义点云字段（只有x,y,z）
                 fields = [
                     PointField('x', 0, PointField.FLOAT32, 1),
                     PointField('y', 4, PointField.FLOAT32, 1),
@@ -286,7 +284,7 @@ class PointCloudMapBuilder:
                 ]
                 
                 # 创建点云消息
-                map_msg = pc2.create_cloud(header, fields, self.accumulated_points)
+                map_msg = pc2.create_cloud(header, fields, xyz_points)
                 
                 # 发布地图
                 self.map_publisher.publish(map_msg)
@@ -296,17 +294,11 @@ class PointCloudMapBuilder:
             except Exception as e:
                 rospy.logerr(f"发布地图时出错: {str(e)}")
     
-    def auto_save_timer_callback(self, event):
-        """自动保存地图"""
-        if time.time() - self.last_auto_save_time >= self.save_interval:
-            self.save_map_to_file("auto_save")
-            self.last_auto_save_time = time.time()
-    
     def save_map_callback(self, request):
         """手动保存地图服务回调"""
         try:
-            filename = self.save_map_to_file("manual_save")
-            rospy.loginfo(f"地图已手动保存到: {filename}")
+            filename = self.save_map_to_pcd()
+            rospy.loginfo(f"地图已保存到: {filename}")
             return EmptyResponse()
         except Exception as e:
             rospy.logerr(f"保存地图失败: {str(e)}")
@@ -326,8 +318,8 @@ class PointCloudMapBuilder:
             rospy.logerr(f"清空地图失败: {str(e)}")
             return EmptyResponse()
     
-    def save_map_to_file(self, save_type="manual"):
-        """保存地图到文件"""
+    def save_map_to_pcd(self):
+        """保存累积地图为PCD文件"""
         with self.map_lock:
             if not self.accumulated_points:
                 rospy.logwarn("地图为空，无法保存")
@@ -335,61 +327,34 @@ class PointCloudMapBuilder:
             
             # 生成文件名
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{save_type}_map_{timestamp}.pkl"
+            filename = f"{self.map_name}_{timestamp}.pcd"
             filepath = os.path.join(self.save_directory, filename)
             
-            # 保存数据
-            map_data = {
-                'points': self.accumulated_points,
-                'timestamp': timestamp,
-                'total_points': len(self.accumulated_points),
-                'frames_added': self.total_frames_added,
-                'map_frame': self.map_frame,
-                'voxel_size': self.voxel_size,
-                'save_mode': self.save_mode,
-                'statistics': {
-                    'total_input_points': self.total_input_points,
-                    'frames_processed': self.frames_processed,
-                    'frames_saved': self.frames_saved
-                }
-            }
-            
-            with open(filepath, 'wb') as f:
-                pickle.dump(map_data, f)
-            
-            # 同时保存为PCD格式
-            pcd_filename = f"{save_type}_map_{timestamp}.pcd"
-            pcd_filepath = os.path.join(self.save_directory, pcd_filename)
-            self.save_as_pcd(pcd_filepath)
-            
-            rospy.loginfo(f"地图已保存: {filepath} (点数: {len(self.accumulated_points)})")
-            rospy.loginfo(f"PCD格式已保存: {pcd_filepath}")
-            
-            return filepath
-    
-    def save_as_pcd(self, filepath):
-        """保存为PCD格式"""
-        try:
-            with open(filepath, 'w') as f:
-                # PCD文件头
-                f.write("# .PCD v0.7 - Point Cloud Data file format\n")
-                f.write("VERSION 0.7\n")
-                f.write("FIELDS x y z\n")
-                f.write("SIZE 4 4 4\n")
-                f.write("TYPE F F F\n")
-                f.write("COUNT 1 1 1\n")
-                f.write(f"WIDTH {len(self.accumulated_points)}\n")
-                f.write("HEIGHT 1\n")
-                f.write("VIEWPOINT 0 0 0 1 0 0 0\n")
-                f.write(f"POINTS {len(self.accumulated_points)}\n")
-                f.write("DATA ascii\n")
-                
-                # 点云数据
-                for point in self.accumulated_points:
-                    f.write(f"{point[0]:.6f} {point[1]:.6f} {point[2]:.6f}\n")
+            try:
+                with open(filepath, 'w') as f:
+                    # PCD文件头
+                    f.write("# .PCD v0.7 - Point Cloud Data file format\n")
+                    f.write("VERSION 0.7\n")
+                    f.write("FIELDS x y z\n")
+                    f.write("SIZE 4 4 4\n")
+                    f.write("TYPE F F F\n")
+                    f.write("COUNT 1 1 1\n")
+                    f.write(f"WIDTH {len(self.accumulated_points)}\n")
+                    f.write("HEIGHT 1\n")
+                    f.write("VIEWPOINT 0 0 0 1 0 0 0\n")
+                    f.write(f"POINTS {len(self.accumulated_points)}\n")
+                    f.write("DATA ascii\n")
                     
-        except Exception as e:
-            rospy.logerr(f"保存PCD文件失败: {str(e)}")
+                    # 点云数据
+                    for point in self.accumulated_points:
+                        f.write(f"{point[0]:.6f} {point[1]:.6f} {point[2]:.6f}\n")
+                
+                rospy.loginfo(f"地图已保存为PCD文件: {filepath} (点数: {len(self.accumulated_points)})")
+                return filepath
+                
+            except Exception as e:
+                rospy.logerr(f"保存PCD文件失败: {str(e)}")
+                return None
     
     def print_statistics(self):
         """打印统计信息"""
@@ -404,17 +369,26 @@ class PointCloudMapBuilder:
     
     def run(self):
         """运行节点"""
-        rospy.loginfo("等待输入点云数据...")
+        rospy.loginfo("等待点云数据...")
         
         # 定期打印统计信息
         stat_timer = rospy.Timer(rospy.Duration(30.0), lambda event: self.print_statistics())
         
+        # 注册关闭信号处理
+        rospy.on_shutdown(self.shutdown_hook)
+        
         try:
             rospy.spin()
         except rospy.ROSInterruptException:
-            rospy.loginfo("正在保存地图并退出...")
-            self.save_map_to_file("shutdown_save")
-            self.print_statistics()
+            pass  # 正常退出
+    
+    def shutdown_hook(self):
+        """关闭时的回调函数"""
+        rospy.loginfo("正在保存地图并退出...")
+        saved_file = self.save_map_to_pcd()
+        if saved_file:
+            rospy.loginfo(f"地图已保存完成: {saved_file}")
+        self.print_statistics()
 
 
 def main():

@@ -1,0 +1,28 @@
+# 配置文件示例
+pointcloud_map_builder:
+  # 基本配置
+  input_topic: "/filtered_pointcloud"
+  output_topic: "/accumulated_map"
+  map_frame: "map"
+  
+  # 拼接策略 - 时间模式
+  save_mode: "time"
+  time_interval: 1.5  # 每1.5秒保存一帧
+  
+  # 拼接策略 - 帧数模式
+  # save_mode: "frame"
+  # frame_interval: 3  # 每3帧保存一帧
+  
+  # 地图管理
+  max_map_points: 2000000
+  voxel_size: 0.03  # 更小的体素提高精度
+  enable_voxel_filter: true
+  
+  # 质量控制
+  min_points_threshold: 50
+  max_distance: 30.0
+  
+  # 自动保存
+  auto_save: true
+  save_interval: 120.0  # 每2分钟自动保存
+  save_directory: "~/my_maps"

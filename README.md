@@ -2,9 +2,10 @@
 
 这套点云地图构建系统由以下几个主要组件组成：
 
-1. **动态点过滤器** (`dynamic_point_remover.py`) - 移除动态物体点云
-2. **地图构建器** (`pointcloud_map_builder.py`) - 累积静态点云生成地图
-3. **地图工具** (`map_utils.py`) - 地图分析和处理工具
+1. **动态物体检测** https://github.com/ethz-asl/dynablox.git
+2. **动态点过滤器** (`dynamic_point_remover.py`) - 移除动态物体点云
+3. **地图构建器** (`pointcloud_map_builder.py`) - 累积静态点云生成地图
+
 
 ## 快速开始
 
@@ -49,6 +50,12 @@ roslaunch your_package pointcloud_map_builder.launch rviz:=true
    - 适合变速移动的场景
    - 参数: `frame_interval` (帧数)
 
+### 地图保存
+
+- **手动保存**: 调用服务保存当前累积的所有点云为PCD文件
+- **自动保存**: 程序退出时自动保存
+- **文件格式**: 标准PCD格式，便于使用PCL等工具处理
+
 ### 地图质量控制
 
 - **体素滤波**: 减少点云密度，提高处理效率
@@ -59,40 +66,13 @@ roslaunch your_package pointcloud_map_builder.launch rviz:=true
 ### 服务接口
 
 ```bash
-# 手动保存地图
+# 手动保存地图（保存为PCD文件）
 rosservice call /pointcloud_map_builder/save_map
 
 # 清空当前地图
 rosservice call /pointcloud_map_builder/clear_map
 ```
 
-## 地图工具使用
-
-### 分析地图
-```bash
-python3 map_utils.py analyze --input /path/to/map.pkl
-```
-
-### 发布地图供可视化
-```bash
-python3 map_utils.py publish --input /path/to/map.pkl --frame map
-```
-
-### 裁剪地图
-```bash
-python3 map_utils.py crop --input map.pkl --output cropped_map.pkl \
-    --x-min -10 --x-max 10 --y-min -5 --y-max 5 --z-min 0 --z-max 3
-```
-
-### 合并多个地图
-```bash
-python3 map_utils.py merge --files map1.pkl map2.pkl map3.pkl --output merged_map.pkl
-```
-
-### 转换为PCD格式
-```bash
-python3 map_utils.py convert --input map.pkl --output map.pcd
-```
 
 ## 参数调优建议
 
@@ -107,9 +87,39 @@ python3 map_utils.py convert --input map.pkl --output map.pcd
 - 调整 `min_points_threshold` 过滤噪声帧
 
 ### 存储优化
-- 启用 `auto_save` 定期保存地图
-- 设置合适的 `save_interval` 平衡性能和安全性
-- 选择合适的 `save_directory` 确保足够存储空间
+- 设置合适的 `save_directory` 确保足够存储空间
+- 选择合适的 `map_name` 便于文件管理
+- PCD格式便于后续处理和可视化
+
+## 使用流程
+
+### 基本操作
+
+1. **启动系统**:
+```bash
+roslaunch pointcloud_mapping pointcloud_map_builder.launch
+```
+
+2. **可视化监控**:
+```bash
+rosrun rviz rviz -d pointcloud_mapping/rviz/map_builder.rviz
+```
+
+3. **保存地图**:
+```bash
+# 手动保存（任何时候）
+rosservice call /pointcloud_map_builder/save_map
+
+# 程序会在退出时自动保存
+```
+
+4. **使用保存的地图**:
+```bash
+# 使用PCL工具查看
+pcl_viewer /path/to/your_map_20240815_143022.pcd
+
+# 或在RViz中加载PCD文件
+```
 
 ## 故障排除
 
@@ -142,55 +152,3 @@ rostopic hz /filtered_pointcloud
 # 查看节点状态
 rosnode info /pointcloud_map_builder
 ```
-
-# 文件结构说明
-# 推荐的包文件结构:
-
-pointcloud_mapping/
-├── CMakeLists.txt
-├── package.xml
-├── README.md
-├── scripts/
-│   ├── dynamic_point_remover.py
-│   ├── pointcloud_map_builder.py
-│   └── map_utils.py
-├── launch/
-│   ├── dynamic_point_remover.launch
-│   └── pointcloud_map_builder.launch
-├── config/
-│   └── map_builder_config.yaml
-├── rviz/
-│   └── map_builder.rviz
-└── docs/
-    └── usage_guide.md
-
-# 安装和编译步骤:
-
-1. 将代码放到catkin工作空间的src目录下:
-   cd ~/catkin_ws/src
-   git clone <your_repo> pointcloud_mapping
-
-2. 确保Python脚本有执行权限:
-   chmod +x pointcloud_mapping/scripts/*.py
-
-3. 编译包:
-   cd ~/catkin_ws
-   catkin_make
-
-4. 设置环境变量:
-   source devel/setup.bash
-
-5. 运行节点:
-   roslaunch pointcloud_mapping pointcloud_map_builder.launch
-
-# 依赖安装:
-sudo apt-get update
-sudo apt-get install -y \
-    ros-$ROS_DISTRO-sensor-msgs \
-    ros-$ROS_DISTRO-geometry-msgs \
-    ros-$ROS_DISTRO-visualization-msgs \
-    ros-$ROS_DISTRO-tf2 \
-    ros-$ROS_DISTRO-tf2-ros \
-    ros-$ROS_DISTRO-tf2-sensor-msgs \
-    ros-$ROS_DISTRO-tf2-geometry-msgs \
-    python3-numpy
